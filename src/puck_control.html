@@ -108,6 +108,68 @@
     margin-bottom: 4px;
   }
   .full { grid-column: 1 / -1; }
+  .led-designer {
+    border: 1px solid var(--line);
+    background: #fff;
+    padding: 12px;
+    margin-bottom: 22px;
+  }
+  .led-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .led-top label {
+    font-size: 11px;
+    color: #5d6659;
+  }
+  #ledColor {
+    width: 44px;
+    height: 30px;
+    border: 1px solid var(--line);
+    background: transparent;
+    padding: 0;
+  }
+  #ledHex {
+    font-size: 11px;
+    color: #5d6659;
+    min-width: 74px;
+    text-align: right;
+  }
+  .led-map {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .led-node {
+    border: 1px solid #ced4c8;
+    background: #f6f8f3;
+    color: #2e352d;
+    padding: 10px 8px;
+    text-align: center;
+    font-size: 12px;
+  }
+  .led-node.active {
+    border-color: #263526;
+    box-shadow: inset 0 0 0 1px #263526;
+  }
+  .led-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .led-actions button {
+    background: #fff;
+    color: var(--ink);
+  }
+  .led-actions button.active-all {
+    background: var(--live-dim);
+    border-color: var(--live);
+    color: #1c5c3b;
+  }
   .log {
     border: 1px solid var(--line);
     background: #fff;
@@ -351,6 +413,27 @@
     <button data-cmd="5" disabled><span class="k">05</span>Gesture sensor</button>
   </div>
 
+  <p class="section-label">LED painter — pick one LED or Select All, then drag color wheel for live updates</p>
+  <div class="led-designer">
+    <div class="led-top">
+      <label for="ledColor">Selected color</label>
+      <input id="ledColor" type="color" value="#2f8f5b" disabled>
+      <span id="ledHex">#2F8F5B</span>
+    </div>
+    <div class="led-map" id="ledMap">
+      <button class="led-node" data-led-index="0" disabled>LED 1</button>
+      <button class="led-node" data-led-index="1" disabled>LED 2</button>
+      <button class="led-node" data-led-index="2" disabled>LED 3</button>
+      <button class="led-node" data-led-index="3" disabled>LED 4</button>
+      <button class="led-node" data-led-index="4" disabled>LED 5</button>
+      <button class="led-node" data-led-index="5" disabled>LED 6</button>
+    </div>
+    <div class="led-actions">
+      <button id="ledSelectAllBtn" disabled>Select All: Off</button>
+      <button id="ledClearBtn" disabled>Turn All Off</button>
+    </div>
+  </div>
+
   <p class="section-label">Live orientation — set the puck on a table, calibrate, then move it</p>
   <div id="viewport">
     <div class="orientation-hud">
@@ -377,7 +460,7 @@
     <div class="gesture-hud">
       <div class="gesture-hud-left">
         <span id="gestureState" class="gesture-state">Idle</span>
-        <span id="gestureDirection" class="gesture-direction">Direction: none</span>
+        <span id="gestureDirection" class="gesture-direction">Proximity-only mode</span>
       </div>
       <span id="gestureTrend" class="gesture-trend">Waiting for data</span>
     </div>
@@ -402,6 +485,11 @@ const statusText = document.getElementById('statusText');
 const connectBtn = document.getElementById('connectBtn');
 const logEl = document.getElementById('log');
 const cmdButtons = document.querySelectorAll('[data-cmd]');
+const ledColorInput = document.getElementById('ledColor');
+const ledHex = document.getElementById('ledHex');
+const ledNodes = document.querySelectorAll('[data-led-index]');
+const ledSelectAllBtn = document.getElementById('ledSelectAllBtn');
+const ledClearBtn = document.getElementById('ledClearBtn');
 const liveBtn = document.getElementById('liveBtn');
 const calibrateBtn = document.getElementById('calibrateBtn');
 const gestureFlash = document.getElementById('gestureFlash');
@@ -420,6 +508,11 @@ let proxMin = null, proxMax = null, proxSampleCount = 0;
 const MAX_LOG_LINES = 300;
 let lastProxValue = null;
 let trendSmoothed = 0;
+let lastStrongDirectionAt = 0;
+let gestureActiveVisual = false;
+const ledColors = new Array(6).fill('#000000');
+let selectedLedIndex = 0;
+let selectAllMode = false;
 
 let liveActive = false;
 
@@ -442,6 +535,10 @@ function setState(state) {
     connectBtn.textContent = 'Disconnect';
     connectBtn.classList.add('connected');
     cmdButtons.forEach(b => b.disabled = false);
+    ledColorInput.disabled = false;
+    ledSelectAllBtn.disabled = false;
+    ledClearBtn.disabled = false;
+    ledNodes.forEach(n => n.disabled = false);
     liveBtn.disabled = false;
     calibrateBtn.disabled = false;
   } else if (state === 'connecting') {
@@ -450,6 +547,10 @@ function setState(state) {
     connectBtn.textContent = 'Connecting…';
     connectBtn.classList.remove('connected');
     cmdButtons.forEach(b => b.disabled = true);
+    ledColorInput.disabled = true;
+    ledSelectAllBtn.disabled = true;
+    ledClearBtn.disabled = true;
+    ledNodes.forEach(n => n.disabled = true);
     liveBtn.disabled = true;
     calibrateBtn.disabled = true;
   } else {
@@ -457,12 +558,45 @@ function setState(state) {
     connectBtn.textContent = 'Connect to Puck-Control';
     connectBtn.classList.remove('connected');
     cmdButtons.forEach(b => b.disabled = true);
+    ledColorInput.disabled = true;
+    ledSelectAllBtn.disabled = true;
+    ledClearBtn.disabled = true;
+    ledNodes.forEach(n => n.disabled = true);
     liveBtn.disabled = true;
     calibrateBtn.disabled = true;
     liveBtn.textContent = 'Start live view';
     liveBtn.classList.remove('active-live');
     liveActive = false;
   }
+}
+
+function hexToRgb(hex) {
+  const clean = hex.replace('#', '');
+  return {
+    r: parseInt(clean.slice(0, 2), 16),
+    g: parseInt(clean.slice(2, 4), 16),
+    b: parseInt(clean.slice(4, 6), 16)
+  };
+}
+
+function paintLedNode(index, hex, markActive = false) {
+  const node = ledNodes[index];
+  if (!node) return;
+  node.style.background = hex;
+  const rgb = hexToRgb(hex);
+  const brightness = (rgb.r * 299 + rgb.g * 587 + rgb.b * 114) / 1000;
+  node.style.color = brightness > 140 ? '#1d261f' : '#f2f6f1';
+  node.classList.toggle('active', markActive);
+}
+
+function refreshLedMap() {
+  ledNodes.forEach((n, i) => paintLedNode(i, ledColors[i], !selectAllMode && i === selectedLedIndex));
+}
+
+function setSelectedLed(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= ledColors.length) return;
+  selectedLedIndex = index;
+  refreshLedMap();
 }
 
 async function connect() {
@@ -515,19 +649,61 @@ function onDisconnected() {
   lastProxValue = null;
   trendSmoothed = 0;
   setGestureState('Idle', 'idle');
-  gestureDirection.textContent = 'Direction: none';
+  gestureDirection.textContent = 'Proximity-only mode';
   gestureTrend.textContent = 'Waiting for data';
   log('Disconnected.');
 }
 
-async function sendCommand(cmd) {
+async function sendCommand(cmd, shouldLog = true) {
   if (!rxChar) return;
   try {
     await rxChar.writeValue(new TextEncoder().encode(cmd));
-    log('Sent: ' + cmd);
+    if (shouldLog) log('Sent: ' + cmd);
   } catch (err) {
     log('Send failed: ' + err.message);
   }
+}
+
+function applyColorToLed(index, silent = false) {
+  const hex = ledColorInput.value;
+  const { r, g, b } = hexToRgb(hex);
+  sendCommand(`LC,${index},${r},${g},${b}`, !silent);
+  ledColors[index] = hex;
+  refreshLedMap();
+}
+
+function applyColorToAllLeds(silent = false) {
+  const hex = ledColorInput.value;
+  const { r, g, b } = hexToRgb(hex);
+  sendCommand(`LCA,${r},${g},${b}`, !silent);
+  for (let i = 0; i < ledColors.length; i++) {
+    ledColors[i] = hex;
+  }
+  refreshLedMap();
+}
+
+function clearAllLeds() {
+  sendCommand('LOFF');
+  for (let i = 0; i < ledColors.length; i++) {
+    ledColors[i] = '#000000';
+  }
+  refreshLedMap();
+}
+
+function pushLiveColorToSelectedLed() {
+  if (ledColorInput.disabled) return;
+  if (selectAllMode) {
+    applyColorToAllLeds(true);
+  } else {
+    applyColorToLed(selectedLedIndex, true);
+  }
+}
+
+function setSelectAllMode(enabled) {
+  selectAllMode = enabled;
+  ledSelectAllBtn.textContent = enabled ? 'Select All: On' : 'Select All: Off';
+  ledSelectAllBtn.classList.toggle('active-all', enabled);
+  refreshLedMap();
 }
 
 connectBtn.addEventListener('click', () => {
@@ -541,6 +717,32 @@ connectBtn.addEventListener('click', () => {
 cmdButtons.forEach(btn => {
   btn.addEventListener('click', () => sendCommand(btn.dataset.cmd));
 });
+
+ledColorInput.addEventListener('input', () => {
+  ledHex.textContent = ledColorInput.value.toUpperCase();
+  pushLiveColorToSelectedLed();
+});
+
+ledNodes.forEach(node => {
+  node.addEventListener('click', () => {
+    const idx = Number(node.dataset.ledIndex);
+    if (!Number.isInteger(idx)) return;
+    if (selectAllMode) {
+      setSelectAllMode(false);
+    }
+    setSelectedLed(idx);
+    applyColorToLed(idx);
+  });
+});
+
+ledSelectAllBtn.addEventListener('click', () => {
+  setSelectAllMode(!selectAllMode);
+  if (selectAllMode) {
+    applyColorToAllLeds();
+  }
+});
+
+ledClearBtn.addEventListener('click', () => clearAllLeds());
 
 // ---- Message routing ----
 // The firmware sends three kinds of lines: plain status text (command
@@ -580,16 +782,26 @@ function handleIncoming(value) {
     flashGesture();
     pulseGestureOrb();
     setGestureState('Gesture Detected', 'active');
+    gestureActiveVisual = true;
     log('Gesture detected');
     return;
   }
   if (value.startsWith('G,ENDED')) {
     setGestureState('Gesture Ended', 'ended');
+    gestureActiveVisual = false;
     log('Gesture ended');
     return;
   }
   if (value.startsWith('D,')) {
-    handleDirectionPacket(value);
+    // Direction packets are intentionally ignored in proximity-only mode.
+    return;
+  }
+  if (value.startsWith('LED ')) {
+    log(value);
+    return;
+  }
+  if (value === 'All LEDs set.' || value === 'LEDs cleared.') {
+    log(value);
     return;
   }
   log(value);
@@ -605,6 +817,21 @@ function handleDirectionPacket(value) {
 
   const lateral = parts[1] || 'CENTER';
   const depth = parts[2] || 'STABLE';
+
+  const isNeutral = (lateral === 'CENTER' && depth === 'STABLE');
+  if (isNeutral && (Date.now() - lastStrongDirectionAt < 900)) {
+    return;
+  }
+
+  // Ignore raw direction packets unless we are inside an active gesture.
+  if (!gestureActiveVisual) {
+    return;
+  }
+
+  if (!isNeutral) {
+    lastStrongDirectionAt = Date.now();
+  }
+
   gestureDirection.textContent = `Direction: ${lateral} / ${depth}`;
   log(`Direction: ${lateral} / ${depth}`);
 
@@ -682,7 +909,7 @@ liveBtn.addEventListener('click', () => {
     lastProxValue = null;
     trendSmoothed = 0;
     setGestureState('Idle', 'idle');
-    gestureDirection.textContent = 'Direction: none';
+    gestureDirection.textContent = 'Proximity-only mode';
     gestureTrend.textContent = 'Waiting for data';
     proxRange.textContent = 'No data yet — waiting for first sample';
     sendCommand('6');
@@ -913,6 +1140,9 @@ function pulseGestureOrb() {
 
 setState('disconnected');
 setGestureState('Idle', 'idle');
+for (let i = 0; i < ledColors.length; i++) {
+  paintLedNode(i, ledColors[i], i === selectedLedIndex);
+}
 </script>
 </body>
 </html>

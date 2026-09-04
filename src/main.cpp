@@ -78,6 +78,13 @@ volatile LedState pendingLedState = LED_NONE;
 // Same reasoning as pendingLedState — BLE commands must not run tests
 // directly from onWrite() (BLE task context). Defer to loop() instead.
 volatile char pendingCommand = 0;
+volatile bool requestLedSetOne = false;
+volatile bool requestLedSetAll = false;
+volatile bool requestLedClear = false;
+volatile uint8_t ledSetIndex = 0;
+volatile uint8_t ledSetR = 0;
+volatile uint8_t ledSetG = 0;
+volatile uint8_t ledSetB = 0;
 
 // Live sensor streaming (accelerometer + proximity) for the web control page.
 volatile bool requestStreamStart = false;
@@ -89,6 +96,7 @@ const unsigned long STREAM_INTERVAL_MS = 150;
 const uint8_t PROX_TRIGGER_HIGH = 130;
 const uint8_t PROX_TRIGGER_LOW = 95;
 const uint8_t PROX_DEBOUNCE_SAMPLES = 3;
+const bool PROXIMITY_ONLY_MODE = true;
 bool proxAboveThreshold = false;
 uint8_t proxRiseCount = 0;
 uint8_t proxFallCount = 0;
@@ -111,16 +119,28 @@ int16_t prevAccelY = 0;
 bool havePrevAccel = false;
 int32_t gestureAccumX = 0;
 int32_t gestureAccumY = 0;
+int32_t gestureScoreX = 0;
+uint16_t gestureStepCount = 0;
+int32_t accelBaseX = 0;
+int32_t accelBaseY = 0;
+bool accelBaseReady = false;
 uint8_t gestureStartProx = 0;
+uint8_t gestureMinProx = 255;
+uint8_t gestureMaxProx = 0;
 unsigned long gestureStartAt = 0;
 unsigned long lastDirectionEmitAt = 0;
 const int16_t GESTURE_ACCEL_DELTA_THRESHOLD = 700;
-const int16_t GESTURE_TILT_THRESHOLD = 1400;
-const int16_t GESTURE_ACCEL_STEP_DEADBAND = 90;
-const int32_t GESTURE_ACCEL_ACCUM_THRESHOLD = 900;
+const int16_t GESTURE_ACCEL_STEP_DEADBAND = 50;
+const int32_t GESTURE_ACCEL_ACCUM_THRESHOLD = 500;
+const int16_t GESTURE_BASELINE_DELTA_THRESHOLD = 380;
 const int16_t GESTURE_PROX_DELTA_THRESHOLD = 24;
-const unsigned long GESTURE_WINDOW_TIMEOUT_MS = 1200;
+const int16_t GESTURE_PROX_HYSTERESIS = 8;
+const int16_t GESTURE_SCORE_THRESHOLD = 2200;
+const unsigned long GESTURE_WINDOW_TIMEOUT_MS = 1800;
 const unsigned long GESTURE_DIRECTION_UPDATE_MS = 250;
+const unsigned long DIRECTION_RESEND_MS = 900;
+String lastDirectionSent = "";
+unsigned long lastDirectionSentAt = 0;
 
 enum ApdsVariant {
   APDS_VARIANT_UNKNOWN = 0,
@@ -130,19 +150,26 @@ enum ApdsVariant {
 
 ApdsVariant apdsVariant = APDS_VARIANT_UNKNOWN;
 
-String inferDirectionLabel(int16_t dx, int16_t dy, int16_t dProx, int16_t curX, int16_t curY, int32_t accumX, int32_t accumY) {
+bool isNeutralDirection(const String& label) {
+  return label == "CENTER,STABLE";
+}
+
+bool shouldSendDirection(const String& label) {
+  unsigned long now = millis();
+  if (label != lastDirectionSent || (now - lastDirectionSentAt) >= DIRECTION_RESEND_MS) {
+    lastDirectionSent = label;
+    lastDirectionSentAt = now;
+    return true;
+  }
+  return false;
+}
+
+String inferDirectionLabel(int16_t dx, int16_t dy, int16_t dProx, int16_t baseDx, int16_t baseDy, int32_t accumX, int32_t accumY) {
   String lateral = "CENTER";
 
-  // Primary: accumulated motion across the active gesture window. This is
-  // much more robust than a single start/end snapshot for planar sweeps.
-  if (abs(accumX) >= GESTURE_ACCEL_ACCUM_THRESHOLD || abs(accumY) >= GESTURE_ACCEL_ACCUM_THRESHOLD) {
-    if (abs(accumX) >= abs(accumY)) {
-      if (accumX > 0) lateral = "RIGHT";
-      else lateral = "LEFT";
-    } else {
-      if (accumY > 0) lateral = "UP";
-      else lateral = "DOWN";
-    }
+  // Primary: scored X-axis motion across the whole gesture window.
+  if (abs(accumX) >= GESTURE_SCORE_THRESHOLD) {
+    lateral = (accumX > 0) ? "RIGHT" : "LEFT";
   }
 
   if (lateral != "CENTER") {
@@ -152,24 +179,14 @@ String inferDirectionLabel(int16_t dx, int16_t dy, int16_t dProx, int16_t curX, 
     return lateral + "," + depth;
   }
 
-  if (abs(dx) >= abs(dy)) {
-    if (dx > GESTURE_ACCEL_DELTA_THRESHOLD) lateral = "RIGHT";
-    else if (dx < -GESTURE_ACCEL_DELTA_THRESHOLD) lateral = "LEFT";
-  } else {
-    if (dy > GESTURE_ACCEL_DELTA_THRESHOLD) lateral = "UP";
-    else if (dy < -GESTURE_ACCEL_DELTA_THRESHOLD) lateral = "DOWN";
-  }
+  if (dx > GESTURE_ACCEL_DELTA_THRESHOLD) lateral = "RIGHT";
+  else if (dx < -GESTURE_ACCEL_DELTA_THRESHOLD) lateral = "LEFT";
 
-  // Fallback: if delta is weak, use current tilt so handheld interactions
-  // still provide useful lateral hints.
+  // Final fallback: compare X against long-term baseline, not absolute tilt.
+  // This avoids a persistent right/left bias when the puck is held angled.
   if (lateral == "CENTER") {
-    if (abs(curX) >= abs(curY)) {
-      if (curX > GESTURE_TILT_THRESHOLD) lateral = "RIGHT";
-      else if (curX < -GESTURE_TILT_THRESHOLD) lateral = "LEFT";
-    } else {
-      if (curY > GESTURE_TILT_THRESHOLD) lateral = "UP";
-      else if (curY < -GESTURE_TILT_THRESHOLD) lateral = "DOWN";
-    }
+    if (baseDx > GESTURE_BASELINE_DELTA_THRESHOLD) lateral = "RIGHT";
+    else if (baseDx < -GESTURE_BASELINE_DELTA_THRESHOLD) lateral = "LEFT";
   }
 
   String depth = "STABLE";
@@ -363,6 +380,11 @@ void setupAccelerometer() {
   delay(50);
 }
 
+void stopAccelerometer() {
+  // CTRL_REG1 = 0 puts LIS3DH in power-down mode.
+  i2cWriteReg(LIS3DH_ADDR, 0x20, 0x00);
+}
+
 bool setupProximity() {
   uint8_t id = 0;
   bool idRead = i2cReadReg(APDS9960_ADDR, APDS_ID, id);
@@ -462,6 +484,12 @@ uint8_t readProximity() {
 
   lastProx = prox8;
   return prox8;
+}
+
+void stopProximity() {
+  // Disable APDS engines (PON/PEN off) so the sensor is not left running.
+  i2cWriteReg(APDS9960_ADDR, APDS_ENABLE, 0x00);
+  apdsReady = false;
 }
 
 void testAPDS9960() {
@@ -572,6 +600,48 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
     cmd.trim();
     if (cmd.length() == 0) return;
 
+    // LED commands:
+    // LC,<index>,<r>,<g>,<b>  -> set one LED
+    // LCA,<r>,<g>,<b>         -> set all LEDs
+    // LOFF                    -> clear all LEDs
+    if (cmd.startsWith("LC,")) {
+      int index = -1, r = -1, g = -1, b = -1;
+      if (sscanf(cmd.c_str(), "LC,%d,%d,%d,%d", &index, &r, &g, &b) == 4 &&
+          index >= 0 && index < NUM_LEDS &&
+          r >= 0 && r <= 255 && g >= 0 && g <= 255 && b >= 0 && b <= 255) {
+        ledSetIndex = (uint8_t)index;
+        ledSetR = (uint8_t)r;
+        ledSetG = (uint8_t)g;
+        ledSetB = (uint8_t)b;
+        requestLedSetOne = true;
+        sendBLE("LED command queued: index " + String(index));
+      } else {
+        sendBLE("Bad LED command. Use LC,<0-" + String(NUM_LEDS - 1) + ">,<r>,<g>,<b>");
+      }
+      return;
+    }
+
+    if (cmd.startsWith("LCA,")) {
+      int r = -1, g = -1, b = -1;
+      if (sscanf(cmd.c_str(), "LCA,%d,%d,%d", &r, &g, &b) == 3 &&
+          r >= 0 && r <= 255 && g >= 0 && g <= 255 && b >= 0 && b <= 255) {
+        ledSetR = (uint8_t)r;
+        ledSetG = (uint8_t)g;
+        ledSetB = (uint8_t)b;
+        requestLedSetAll = true;
+        sendBLE("LED command queued: all LEDs");
+      } else {
+        sendBLE("Bad LED command. Use LCA,<r>,<g>,<b>");
+      }
+      return;
+    }
+
+    if (cmd == "LOFF") {
+      requestLedClear = true;
+      sendBLE("LED command queued: off");
+      return;
+    }
+
     char command = cmd.charAt(0);
     lastActivityTime = millis();
 
@@ -673,6 +743,16 @@ void goToSleep() {
   Serial.println("Press the wake button (IO2) to wake up.");
   Serial.flush();
 
+  requestStreamStart = false;
+  requestStreamStop = false;
+  requestDiag = false;
+  pendingCommand = 0;
+  requestLedSetOne = false;
+  requestLedSetAll = false;
+  requestLedClear = false;
+
+  stopAccelerometer();
+  stopProximity();
   stopBLE();
   waitingForConnection = false;
   streamingActive = false;
@@ -681,6 +761,13 @@ void goToSleep() {
   FastLED.clear();
   FastLED.show();
   digitalWrite(BUZZ_PIN, LOW);
+  pinMode(BUZZ_PIN, INPUT);
+  pinMode(LED_PIN, INPUT);
+  pinMode(ACCEL_INT, INPUT);
+  pinMode(GEST_INT, INPUT);
+
+  // Shut down I2C peripheral after sensor power-down writes complete.
+  Wire.end();
 
   pinMode(WAKE_PIN, INPUT_PULLUP);
   esp_sleep_enable_ext0_wakeup((gpio_num_t)WAKE_PIN, 0); // wake on LOW (button press)
@@ -746,6 +833,32 @@ void loop() {
     pendingLedState = LED_NONE;
   }
 
+  if (requestLedClear) {
+    requestLedClear = false;
+    FastLED.clear();
+    FastLED.show();
+    sendBLE("LEDs cleared.");
+  }
+
+  if (requestLedSetAll) {
+    requestLedSetAll = false;
+    CRGB color(ledSetR, ledSetG, ledSetB);
+    for (int i = 0; i < NUM_LEDS; i++) {
+      leds[i] = color;
+    }
+    FastLED.show();
+    sendBLE("All LEDs set.");
+  }
+
+  if (requestLedSetOne) {
+    requestLedSetOne = false;
+    if (ledSetIndex < NUM_LEDS) {
+      leds[ledSetIndex] = CRGB(ledSetR, ledSetG, ledSetB);
+      FastLED.show();
+      sendBLE("LED " + String(ledSetIndex) + " set.");
+    }
+  }
+
   if (pendingCommand != 0) {
     char cmd = pendingCommand;
     pendingCommand = 0;
@@ -806,6 +919,8 @@ void loop() {
     bool proxOk = setupProximity();
     apdsReady = proxOk;
     sameProxCount = 0;
+    lastDirectionSent = "";
+    lastDirectionSentAt = 0;
 
     // One-shot diagnostic dump instead of guessing register-by-register —
     // shows exactly what state the chip is actually in right now.
@@ -827,6 +942,7 @@ void loop() {
   if (requestStreamStop) {
     requestStreamStop = false;
     streamingActive = false;
+    stopProximity();
     proxAboveThreshold = false;
     proxRiseCount = 0;
     proxFallCount = 0;
@@ -835,7 +951,13 @@ void loop() {
     sameProxCount = 0;
     gestureAccumX = 0;
     gestureAccumY = 0;
+    gestureScoreX = 0;
+    gestureStepCount = 0;
+    gestureMinProx = 255;
+    gestureMaxProx = 0;
     havePrevAccel = false;
+    lastDirectionSent = "";
+    lastDirectionSentAt = 0;
     Serial.println("Live streaming stopped.");
   }
 
@@ -849,7 +971,11 @@ void loop() {
         int16_t stepY = y - prevAccelY;
 
         if (gestureWindowActive) {
-          if (abs(stepX) > GESTURE_ACCEL_STEP_DEADBAND) gestureAccumX += stepX;
+          if (abs(stepX) > GESTURE_ACCEL_STEP_DEADBAND) {
+            gestureAccumX += stepX;
+            gestureScoreX += stepX;
+            if (gestureStepCount < 65535) gestureStepCount++;
+          }
           if (abs(stepY) > GESTURE_ACCEL_STEP_DEADBAND) gestureAccumY += stepY;
         }
       }
@@ -861,6 +987,19 @@ void loop() {
       latestAccelY = y;
       latestAccelZ = z;
       haveAccelSample = true;
+
+      if (!gestureWindowActive) {
+        if (!accelBaseReady) {
+          accelBaseX = x;
+          accelBaseY = y;
+          accelBaseReady = true;
+        } else {
+          // Slow moving baseline to remove holding-angle bias.
+          accelBaseX = (accelBaseX * 63 + x) / 64;
+          accelBaseY = (accelBaseY * 63 + y) / 64;
+        }
+      }
+
       sendBLE("A," + String(x) + "," + String(y) + "," + String(z));
     }
 
@@ -885,6 +1024,11 @@ void loop() {
 
     sendBLE("P," + String(prox));
 
+    if (gestureWindowActive) {
+      if (prox < gestureMinProx) gestureMinProx = prox;
+      if (prox > gestureMaxProx) gestureMaxProx = prox;
+    }
+
     if (!proxAboveThreshold) {
       if (prox >= PROX_TRIGGER_HIGH) {
         if (proxRiseCount < 255) proxRiseCount++;
@@ -900,7 +1044,11 @@ void loop() {
         lastDirectionEmitAt = 0;
         gestureAccumX = 0;
         gestureAccumY = 0;
+        gestureScoreX = 0;
+        gestureStepCount = 0;
         gestureStartProx = prox;
+        gestureMinProx = prox;
+        gestureMaxProx = prox;
         if (haveAccelSample) {
           gestureStartX = latestAccelX;
           gestureStartY = latestAccelY;
@@ -919,33 +1067,46 @@ void loop() {
         proxFallCount = 0;
         sendBLE("G,ENDED");
 
-        if (gestureWindowActive && haveAccelSample) {
+        if (!PROXIMITY_ONLY_MODE && gestureWindowActive && haveAccelSample) {
           int16_t dx = latestAccelX - gestureStartX;
           int16_t dy = latestAccelY - gestureStartY;
-          int16_t dProx = (int16_t)prox - (int16_t)gestureStartProx;
-          String label = inferDirectionLabel(dx, dy, dProx, latestAccelX, latestAccelY, gestureAccumX, gestureAccumY);
-          sendBLE("D," + label + ",dx=" + String(dx) + ",dy=" + String(dy) + ",ax=" + String((int)gestureAccumX) + ",ay=" + String((int)gestureAccumY) + ",dp=" + String(dProx));
+          int16_t forwardDelta = (int16_t)gestureMaxProx - (int16_t)gestureStartProx;
+          int16_t backwardDelta = (int16_t)gestureStartProx - (int16_t)gestureMinProx;
+          int16_t dProx = 0;
+          if (forwardDelta >= GESTURE_PROX_DELTA_THRESHOLD && forwardDelta > backwardDelta + GESTURE_PROX_HYSTERESIS) {
+            dProx = forwardDelta;
+          } else if (backwardDelta >= GESTURE_PROX_DELTA_THRESHOLD && backwardDelta > forwardDelta + GESTURE_PROX_HYSTERESIS) {
+            dProx = -backwardDelta;
+          }
+          int16_t baseDx = accelBaseReady ? (latestAccelX - (int16_t)accelBaseX) : 0;
+          int16_t baseDy = accelBaseReady ? (latestAccelY - (int16_t)accelBaseY) : 0;
+          String label = inferDirectionLabel(dx, dy, dProx, baseDx, baseDy, gestureScoreX, gestureAccumY);
+          if (!isNeutralDirection(label) && shouldSendDirection(label)) {
+            sendBLE("D," + label + ",dx=" + String(dx) + ",sx=" + String((int)gestureScoreX) + ",steps=" + String(gestureStepCount) + ",bx=" + String(baseDx) + ",f=" + String(forwardDelta) + ",b=" + String(backwardDelta));
+          }
         }
         gestureWindowActive = false;
       }
     }
 
-    if (gestureWindowActive && haveAccelSample && (millis() - lastDirectionEmitAt >= GESTURE_DIRECTION_UPDATE_MS)) {
-      int16_t dx = latestAccelX - gestureStartX;
-      int16_t dy = latestAccelY - gestureStartY;
-      int16_t dProx = (int16_t)prox - (int16_t)gestureStartProx;
-      String label = inferDirectionLabel(dx, dy, dProx, latestAccelX, latestAccelY, gestureAccumX, gestureAccumY);
-      sendBLE("D," + label + ",dx=" + String(dx) + ",dy=" + String(dy) + ",ax=" + String((int)gestureAccumX) + ",ay=" + String((int)gestureAccumY) + ",dp=" + String(dProx));
-      lastDirectionEmitAt = millis();
-    }
-
-    if (gestureWindowActive && (millis() - gestureStartAt > GESTURE_WINDOW_TIMEOUT_MS)) {
+    if (!PROXIMITY_ONLY_MODE && gestureWindowActive && (millis() - gestureStartAt > GESTURE_WINDOW_TIMEOUT_MS)) {
       if (haveAccelSample) {
         int16_t dx = latestAccelX - gestureStartX;
         int16_t dy = latestAccelY - gestureStartY;
-        int16_t dProx = (int16_t)prox - (int16_t)gestureStartProx;
-        String label = inferDirectionLabel(dx, dy, dProx, latestAccelX, latestAccelY, gestureAccumX, gestureAccumY);
-        sendBLE("D," + label + ",dx=" + String(dx) + ",dy=" + String(dy) + ",ax=" + String((int)gestureAccumX) + ",ay=" + String((int)gestureAccumY) + ",dp=" + String(dProx));
+        int16_t forwardDelta = (int16_t)gestureMaxProx - (int16_t)gestureStartProx;
+        int16_t backwardDelta = (int16_t)gestureStartProx - (int16_t)gestureMinProx;
+        int16_t dProx = 0;
+        if (forwardDelta >= GESTURE_PROX_DELTA_THRESHOLD && forwardDelta > backwardDelta + GESTURE_PROX_HYSTERESIS) {
+          dProx = forwardDelta;
+        } else if (backwardDelta >= GESTURE_PROX_DELTA_THRESHOLD && backwardDelta > forwardDelta + GESTURE_PROX_HYSTERESIS) {
+          dProx = -backwardDelta;
+        }
+        int16_t baseDx = accelBaseReady ? (latestAccelX - (int16_t)accelBaseX) : 0;
+        int16_t baseDy = accelBaseReady ? (latestAccelY - (int16_t)accelBaseY) : 0;
+        String label = inferDirectionLabel(dx, dy, dProx, baseDx, baseDy, gestureScoreX, gestureAccumY);
+        if (!isNeutralDirection(label) && shouldSendDirection(label)) {
+          sendBLE("D," + label + ",dx=" + String(dx) + ",sx=" + String((int)gestureScoreX) + ",steps=" + String(gestureStepCount) + ",bx=" + String(baseDx) + ",f=" + String(forwardDelta) + ",b=" + String(backwardDelta));
+        }
       }
       gestureWindowActive = false;
     }
