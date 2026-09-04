@@ -1,0 +1,918 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Puck Control</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+  :root {
+    --ink: #0f1512;
+    --paper: #eef1ea;
+    --line: #c8cfc2;
+    --live: #2f8f5b;
+    --live-dim: #dceee2;
+    --wait: #3559c9;
+    --wait-dim: #dde3f7;
+    --off: #8a8f83;
+    --danger: #b3432f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 32px 20px 60px;
+  }
+  .frame {
+    width: 100%;
+    max-width: 420px;
+  }
+  h1 {
+    font-size: 15px;
+    letter-spacing: 0.02em;
+    margin: 0 0 4px;
+    font-weight: 600;
+  }
+  .sub {
+    font-size: 12px;
+    color: #565f52;
+    margin: 0 0 28px;
+    line-height: 1.5;
+  }
+  .status-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 16px;
+    border: 1px solid var(--line);
+    background: #fff;
+    margin-bottom: 18px;
+  }
+  .dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--off);
+    flex-shrink: 0;
+  }
+  .dot.connected { background: var(--live); }
+  .dot.connecting { background: var(--wait); animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: 0.35; } }
+  #statusText {
+    font-size: 13px;
+    flex: 1;
+  }
+  button {
+    font-family: inherit;
+    cursor: pointer;
+    border: 1px solid var(--ink);
+    background: var(--ink);
+    color: var(--paper);
+    padding: 12px 16px;
+    font-size: 13px;
+    letter-spacing: 0.01em;
+  }
+  button:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  #connectBtn { width: 100%; margin-bottom: 22px; }
+  #connectBtn.connected {
+    background: var(--live-dim);
+    color: #1c5c3b;
+    border-color: var(--live);
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 22px;
+  }
+  .grid button {
+    background: #fff;
+    color: var(--ink);
+    text-align: left;
+    padding: 14px;
+  }
+  .grid button:not(:disabled):active { background: var(--live-dim); }
+  .grid button .k {
+    display: block;
+    font-size: 10px;
+    color: #8a8f83;
+    margin-bottom: 4px;
+  }
+  .full { grid-column: 1 / -1; }
+  .log {
+    border: 1px solid var(--line);
+    background: #fff;
+    padding: 12px 14px;
+    font-size: 12px;
+    line-height: 1.6;
+    height: 160px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    color: #3a4136;
+  }
+  .log .line { border-bottom: 1px dotted #dde1d6; padding: 3px 0; }
+  .log .line:last-child { border-bottom: none; }
+  .note {
+    font-size: 11px;
+    color: #8a8f83;
+    margin-top: 18px;
+    line-height: 1.6;
+  }
+  .note a { color: #565f52; }
+
+  .section-label {
+    font-size: 11px;
+    text-transform: none;
+    color: #8a8f83;
+    margin: 26px 0 8px;
+  }
+  #viewport {
+    position: relative;
+    width: 100%;
+    height: 220px;
+    border: 1px solid var(--line);
+    background:
+      radial-gradient(120% 90% at 50% 0%, #f9fbf8 0%, #eef3ee 55%, #e8eee8 100%);
+    overflow: hidden;
+    margin-bottom: 10px;
+  }
+  .orientation-hud {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    right: 8px;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    pointer-events: none;
+  }
+  .orientation-chip {
+    font-size: 10px;
+    background: rgba(255, 255, 255, 0.78);
+    border: 1px solid #d8dfd3;
+    color: #3f4a3d;
+    padding: 4px 8px;
+    letter-spacing: 0.01em;
+  }
+  .orientation-chip.motion {
+    color: #254670;
+    border-color: #c7d6ea;
+    background: rgba(232, 239, 249, 0.86);
+  }
+  #gestureFlash {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(47, 143, 91, 0);
+    color: transparent;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    pointer-events: none;
+    transition: background 0.15s, color 0.15s;
+  }
+  #gestureFlash.active {
+    background: rgba(47, 143, 91, 0.14);
+    color: #1c5c3b;
+  }
+  .live-controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .live-controls button {
+    background: #fff;
+    color: var(--ink);
+    padding: 12px;
+  }
+  .live-controls button.active-live {
+    background: var(--wait-dim);
+    border-color: var(--wait);
+    color: #1c3a8f;
+  }
+  .readout {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-bottom: 22px;
+  }
+  .readout div {
+    border: 1px solid var(--line);
+    background: #fff;
+    padding: 10px 8px;
+    text-align: center;
+  }
+  .readout .val {
+    display: block;
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 2px;
+  }
+  .readout .lbl {
+    font-size: 9px;
+    color: #8a8f83;
+  }
+  .prox-cell {
+    position: relative;
+  }
+  .activity-dot {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--line);
+  }
+  .activity-dot.pulse {
+    background: var(--live);
+    animation: dotpulse 0.3s ease-out;
+  }
+  @keyframes dotpulse {
+    0% { transform: scale(1.8); opacity: 0.4; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  .range-note {
+    font-size: 10px;
+    color: #8a8f83;
+    text-align: center;
+    margin-top: -14px;
+    margin-bottom: 22px;
+  }
+  #gestureViewport {
+    position: relative;
+    width: 100%;
+    height: 250px;
+    border: 1px solid var(--line);
+    background:
+      radial-gradient(120% 90% at 50% 0%, #f8fbff 0%, #eef4fb 55%, #e7eef6 100%);
+    overflow: hidden;
+    margin-bottom: 10px;
+  }
+  #gestureViewport.pulsing {
+    border-color: var(--live);
+    box-shadow: inset 0 0 0 1px rgba(47, 143, 91, 0.35);
+  }
+  .gesture-hud {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    right: 8px;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    pointer-events: none;
+  }
+  .gesture-hud-left {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .gesture-state {
+    font-size: 10px;
+    padding: 4px 8px;
+    border: 1px solid var(--line);
+    background: rgba(255, 255, 255, 0.78);
+    color: #4a5547;
+    letter-spacing: 0.02em;
+  }
+  .gesture-state.active {
+    border-color: var(--live);
+    background: rgba(220, 238, 226, 0.95);
+    color: #1c5c3b;
+  }
+  .gesture-state.ended {
+    border-color: #6a7fce;
+    background: rgba(221, 227, 247, 0.95);
+    color: #2b3f86;
+  }
+  .gesture-trend {
+    font-size: 10px;
+    color: #5a6656;
+    background: rgba(255, 255, 255, 0.72);
+    border: 1px solid #d7ded2;
+    padding: 4px 8px;
+  }
+  .gesture-direction {
+    font-size: 10px;
+    color: #1f3659;
+    background: rgba(234, 241, 251, 0.9);
+    border: 1px solid #c4d4ea;
+    padding: 4px 8px;
+    letter-spacing: 0.02em;
+  }
+  .prox-readout {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    margin-bottom: 22px;
+  }
+  .prox-readout div {
+    border: 1px solid var(--line);
+    background: #fff;
+    padding: 10px 8px;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+<div class="frame">
+  <h1>Puck Control</h1>
+  <p class="sub">Connects directly over Bluetooth Low Energy — no app needed. Works in Chrome or Edge, on desktop or Android.</p>
+
+  <div class="status-row">
+    <span class="dot" id="dot"></span>
+    <span id="statusText">Not connected</span>
+  </div>
+
+  <button id="connectBtn">Connect to Puck-Control</button>
+
+  <div class="grid">
+    <button class="full" data-cmd="1" disabled><span class="k">01 — everything</span>Run full test</button>
+    <button data-cmd="2" disabled><span class="k">02</span>LEDs</button>
+    <button data-cmd="3" disabled><span class="k">03</span>Buzzer</button>
+    <button data-cmd="4" disabled><span class="k">04</span>Accelerometer</button>
+    <button data-cmd="5" disabled><span class="k">05</span>Gesture sensor</button>
+  </div>
+
+  <p class="section-label">Live orientation — set the puck on a table, calibrate, then move it</p>
+  <div id="viewport">
+    <div class="orientation-hud">
+      <span id="oriAngles" class="orientation-chip">Pitch 0.0° | Roll 0.0°</span>
+      <span id="oriMotion" class="orientation-chip motion">Steady</span>
+    </div>
+    <div id="gestureFlash">GESTURE DETECTED</div>
+  </div>
+  <div class="live-controls">
+    <button id="liveBtn" disabled>Start live view</button>
+    <button id="calibrateBtn" disabled>Calibrate (flat on table)</button>
+  </div>
+  <button data-cmd="7" disabled style="width:100%; background:#fff; color:var(--ink); margin-bottom:22px;">Run APDS diagnostic (one-shot, no streaming)</button>
+  <div class="readout">
+    <div><span class="val" id="rX">—</span><span class="lbl">X</span></div>
+    <div><span class="val" id="rY">—</span><span class="lbl">Y</span></div>
+    <div><span class="val" id="rZ">—</span><span class="lbl">Z</span></div>
+    <div class="prox-cell"><span class="activity-dot" id="proxDot"></span><span class="val" id="rProx">—</span><span class="lbl">Proximity</span></div>
+  </div>
+  <p class="range-note" id="proxRange">No data yet — start live view and watch the dot pulse</p>
+
+  <p class="section-label">Live gesture detection — proximity drives depth while gesture events pulse the scene</p>
+  <div id="gestureViewport">
+    <div class="gesture-hud">
+      <div class="gesture-hud-left">
+        <span id="gestureState" class="gesture-state">Idle</span>
+        <span id="gestureDirection" class="gesture-direction">Direction: none</span>
+      </div>
+      <span id="gestureTrend" class="gesture-trend">Waiting for data</span>
+    </div>
+  </div>
+
+  <div class="log" id="log"></div>
+
+  <p class="note">
+    iPhone note: Safari doesn't support Web Bluetooth, so this page won't connect on iOS. It works on Android Chrome, and on desktop Chrome or Edge.
+  </p>
+</div>
+
+<script>
+const SERVICE_UUID = '6e400001-b5a3-f393-e9a0-c91e24ec4001';
+const CHAR_RX_UUID  = '6e400002-b5a3-f393-e9a0-c91e24ec4002'; // write: browser -> puck
+const CHAR_TX_UUID  = '6e400003-b5a3-f393-e9a0-c91e24ec4003'; // notify: puck -> browser
+
+let device, rxChar, txChar;
+
+const dot = document.getElementById('dot');
+const statusText = document.getElementById('statusText');
+const connectBtn = document.getElementById('connectBtn');
+const logEl = document.getElementById('log');
+const cmdButtons = document.querySelectorAll('[data-cmd]');
+const liveBtn = document.getElementById('liveBtn');
+const calibrateBtn = document.getElementById('calibrateBtn');
+const gestureFlash = document.getElementById('gestureFlash');
+const oriAngles = document.getElementById('oriAngles');
+const oriMotion = document.getElementById('oriMotion');
+const rX = document.getElementById('rX');
+const rY = document.getElementById('rY');
+const rZ = document.getElementById('rZ');
+const rProx = document.getElementById('rProx');
+const proxDot = document.getElementById('proxDot');
+const proxRange = document.getElementById('proxRange');
+const gestureState = document.getElementById('gestureState');
+const gestureDirection = document.getElementById('gestureDirection');
+const gestureTrend = document.getElementById('gestureTrend');
+let proxMin = null, proxMax = null, proxSampleCount = 0;
+const MAX_LOG_LINES = 300;
+let lastProxValue = null;
+let trendSmoothed = 0;
+
+let liveActive = false;
+
+function log(msg) {
+  const line = document.createElement('div');
+  line.className = 'line';
+  line.textContent = msg;
+  logEl.appendChild(line);
+  while (logEl.childElementCount > MAX_LOG_LINES) {
+    logEl.removeChild(logEl.firstElementChild);
+  }
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function setState(state) {
+  dot.className = 'dot';
+  if (state === 'connected') {
+    dot.classList.add('connected');
+    statusText.textContent = 'Connected';
+    connectBtn.textContent = 'Disconnect';
+    connectBtn.classList.add('connected');
+    cmdButtons.forEach(b => b.disabled = false);
+    liveBtn.disabled = false;
+    calibrateBtn.disabled = false;
+  } else if (state === 'connecting') {
+    dot.classList.add('connecting');
+    statusText.textContent = 'Connecting…';
+    connectBtn.textContent = 'Connecting…';
+    connectBtn.classList.remove('connected');
+    cmdButtons.forEach(b => b.disabled = true);
+    liveBtn.disabled = true;
+    calibrateBtn.disabled = true;
+  } else {
+    statusText.textContent = 'Not connected';
+    connectBtn.textContent = 'Connect to Puck-Control';
+    connectBtn.classList.remove('connected');
+    cmdButtons.forEach(b => b.disabled = true);
+    liveBtn.disabled = true;
+    calibrateBtn.disabled = true;
+    liveBtn.textContent = 'Start live view';
+    liveBtn.classList.remove('active-live');
+    liveActive = false;
+  }
+}
+
+async function connect() {
+  if (!navigator.bluetooth) {
+    log('This browser doesn\'t support Web Bluetooth. Use Chrome or Edge.');
+    return;
+  }
+  try {
+    setState('connecting');
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ name: 'Puck-Control' }],
+      optionalServices: [SERVICE_UUID]
+    });
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+
+    log('Connecting to ' + device.name + '…');
+    const server = await device.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE_UUID);
+    rxChar = await service.getCharacteristic(CHAR_RX_UUID);
+    txChar = await service.getCharacteristic(CHAR_TX_UUID);
+
+    await txChar.startNotifications();
+    txChar.addEventListener('characteristicvaluechanged', (e) => {
+      const value = new TextDecoder().decode(e.target.value);
+      handleIncoming(value);
+    });
+
+    setState('connected');
+    log('Connected.');
+  } catch (err) {
+    setState('disconnected');
+    log('Connection failed: ' + err.message);
+  }
+}
+
+function onDisconnected() {
+  setState('disconnected');
+  rX.textContent = '—';
+  rY.textContent = '—';
+  rZ.textContent = '—';
+  rProx.textContent = '—';
+  oriAngles.textContent = 'Pitch 0.0° | Roll 0.0°';
+  oriMotion.textContent = 'Steady';
+  proxRange.textContent = 'No data yet — start live view and watch the dot pulse';
+  proxDot.classList.remove('pulse');
+  gestureViewport.classList.remove('pulsing');
+  proxMin = null;
+  proxMax = null;
+  proxSampleCount = 0;
+  lastProxValue = null;
+  trendSmoothed = 0;
+  setGestureState('Idle', 'idle');
+  gestureDirection.textContent = 'Direction: none';
+  gestureTrend.textContent = 'Waiting for data';
+  log('Disconnected.');
+}
+
+async function sendCommand(cmd) {
+  if (!rxChar) return;
+  try {
+    await rxChar.writeValue(new TextEncoder().encode(cmd));
+    log('Sent: ' + cmd);
+  } catch (err) {
+    log('Send failed: ' + err.message);
+  }
+}
+
+connectBtn.addEventListener('click', () => {
+  if (device && device.gatt.connected) {
+    device.gatt.disconnect();
+  } else {
+    connect();
+  }
+});
+
+cmdButtons.forEach(btn => {
+  btn.addEventListener('click', () => sendCommand(btn.dataset.cmd));
+});
+
+// ---- Message routing ----
+// The firmware sends three kinds of lines: plain status text (command
+// results), and while live view is on, "A,x,y,z" (accelerometer) and
+// "P,value" (proximity) every ~150ms, plus "G,DETECTED" on a gesture.
+function handleIncoming(value) {
+  if (value.startsWith('A,')) {
+    const parts = value.slice(2).split(',').map(Number);
+    if (parts.length === 3) updateOrientation(parts[0], parts[1], parts[2]);
+    return; // don't spam the log with every sample
+  }
+  if (value.startsWith('P,')) {
+    const prox = Number(value.slice(2));
+    if (!isNaN(prox)) {
+      rProx.textContent = prox;
+      updateGestureOrb(prox);
+
+      // Pulse regardless of value — this proves data is actively streaming,
+      // separate from whether the reading itself looks meaningful.
+      proxDot.classList.remove('pulse');
+      void proxDot.offsetWidth; // restart the CSS animation
+      proxDot.classList.add('pulse');
+
+      proxSampleCount++;
+      proxMin = (proxMin === null) ? prox : Math.min(proxMin, prox);
+      proxMax = (proxMax === null) ? prox : Math.max(proxMax, prox);
+      const varying = proxMax > proxMin;
+      proxRange.textContent = varying
+        ? `Range so far: ${proxMin}–${proxMax} — sensor is responding`
+        : `Stuck at ${prox} after ${proxSampleCount} samples — move something near the sensor to test`;
+
+      updateTrend(prox);
+    }
+    return;
+  }
+  if (value.startsWith('G,DETECTED')) {
+    flashGesture();
+    pulseGestureOrb();
+    setGestureState('Gesture Detected', 'active');
+    log('Gesture detected');
+    return;
+  }
+  if (value.startsWith('G,ENDED')) {
+    setGestureState('Gesture Ended', 'ended');
+    log('Gesture ended');
+    return;
+  }
+  if (value.startsWith('D,')) {
+    handleDirectionPacket(value);
+    return;
+  }
+  log(value);
+}
+
+function handleDirectionPacket(value) {
+  // Format: D,LATERAL,DEPTH,dx=...,dy=...,dp=...
+  const parts = value.split(',');
+  if (parts.length < 3) {
+    log(value);
+    return;
+  }
+
+  const lateral = parts[1] || 'CENTER';
+  const depth = parts[2] || 'STABLE';
+  gestureDirection.textContent = `Direction: ${lateral} / ${depth}`;
+  log(`Direction: ${lateral} / ${depth}`);
+
+  if (lateral === 'LEFT') {
+    targetOrbX = -0.9;
+  } else if (lateral === 'RIGHT') {
+    targetOrbX = 0.9;
+  } else if (lateral === 'UP') {
+    targetOrbX = 0;
+    targetOrbY -= 0.2;
+  } else if (lateral === 'DOWN') {
+    targetOrbX = 0;
+    targetOrbY += 0.2;
+  } else {
+    targetOrbX = 0;
+  }
+
+  if (depth === 'FORWARD') {
+    pulseStrength = Math.max(pulseStrength, 1.1);
+    orbMaterial.color.setHex(0x2f8f5b);
+  } else if (depth === 'BACKWARD') {
+    pulseStrength = Math.max(pulseStrength, 0.7);
+    orbMaterial.color.setHex(0x3e6fb5);
+  } else {
+    orbMaterial.color.setHex(0x2f8f5b);
+  }
+}
+
+function setGestureState(text, mode = 'idle') {
+  gestureState.textContent = text;
+  gestureState.className = 'gesture-state';
+  if (mode === 'active') gestureState.classList.add('active');
+  if (mode === 'ended') gestureState.classList.add('ended');
+
+  if (mode !== 'idle') {
+    setTimeout(() => {
+      if (gestureState.textContent === text) {
+        gestureState.textContent = 'Idle';
+        gestureState.className = 'gesture-state';
+      }
+    }, 1200);
+  }
+}
+
+function updateTrend(prox) {
+  if (lastProxValue === null) {
+    lastProxValue = prox;
+    gestureTrend.textContent = 'Collecting baseline';
+    return;
+  }
+
+  const delta = prox - lastProxValue;
+  lastProxValue = prox;
+  trendSmoothed = trendSmoothed * 0.7 + delta * 0.3;
+
+  if (trendSmoothed > 4) {
+    gestureTrend.textContent = 'Approaching sensor';
+  } else if (trendSmoothed < -4) {
+    gestureTrend.textContent = 'Moving away';
+  } else {
+    gestureTrend.textContent = 'Stable';
+  }
+}
+
+function flashGesture() {
+  gestureFlash.classList.add('active');
+  setTimeout(() => gestureFlash.classList.remove('active'), 500);
+}
+
+// ---- Live view: toggle streaming on the puck ----
+liveBtn.addEventListener('click', () => {
+  liveActive = !liveActive;
+  if (liveActive) {
+    proxMin = null; proxMax = null; proxSampleCount = 0;
+    lastProxValue = null;
+    trendSmoothed = 0;
+    setGestureState('Idle', 'idle');
+    gestureDirection.textContent = 'Direction: none';
+    gestureTrend.textContent = 'Waiting for data';
+    proxRange.textContent = 'No data yet — waiting for first sample';
+    sendCommand('6');
+    liveBtn.textContent = 'Stop live view';
+    liveBtn.classList.add('active-live');
+  } else {
+    sendCommand('0');
+    liveBtn.textContent = 'Start live view';
+    liveBtn.classList.remove('active-live');
+  }
+});
+
+// ---- Calibration ----
+// Zero out the current tilt as "flat on the table" so the 3D puck reads
+// level right after calibrating, regardless of how it's actually sitting.
+let calPitch = 0, calRoll = 0;
+calibrateBtn.addEventListener('click', () => {
+  calPitch = targetPitch;
+  calRoll = targetRoll;
+  log('Calibrated — current position set as flat.');
+});
+
+// ---- 3D puck view (Three.js) ----
+const RAD_TO_DEG = 57.2957795;
+let lastPitch = 0, lastRoll = 0;
+let targetPitch = 0, targetRoll = 0;
+let filtX = 0, filtY = 0, filtZ = 0;
+let filtReady = false;
+let pitchDisplayDeg = 0, rollDisplayDeg = 0;
+let motionDisplay = 0;
+const viewport = document.getElementById('viewport');
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(35, viewport.clientWidth / viewport.clientHeight, 0.1, 100);
+camera.position.set(0, 2.4, 3.2);
+camera.lookAt(0, 0, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setSize(viewport.clientWidth, viewport.clientHeight);
+viewport.insertBefore(renderer.domElement, gestureFlash);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+dirLight.position.set(2, 4, 3);
+scene.add(dirLight);
+
+const puckGroup = new THREE.Group();
+const puckBody = new THREE.Mesh(
+  new THREE.CylinderGeometry(1, 1, 0.28, 48),
+  new THREE.MeshStandardMaterial({ color: 0x0f1512, roughness: 0.6 })
+);
+puckGroup.add(puckBody);
+
+// A marker stripe on top so orientation/rotation is visible, not just tilt.
+const marker = new THREE.Mesh(
+  new THREE.BoxGeometry(1.5, 0.05, 0.14),
+  new THREE.MeshStandardMaterial({ color: 0x2f8f5b })
+);
+marker.position.y = 0.145;
+puckGroup.add(marker);
+
+scene.add(puckGroup);
+
+function resizeRenderer() {
+  const w = viewport.clientWidth, h = viewport.clientHeight;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+}
+window.addEventListener('resize', resizeRenderer);
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  const zGoal = targetPitch - calPitch;
+  const xGoal = targetRoll - calRoll;
+  puckGroup.rotation.z += (zGoal - puckGroup.rotation.z) * 0.18;
+  puckGroup.rotation.x += (xGoal - puckGroup.rotation.x) * 0.18;
+
+  pitchDisplayDeg += ((zGoal * RAD_TO_DEG) - pitchDisplayDeg) * 0.22;
+  rollDisplayDeg += ((xGoal * RAD_TO_DEG) - rollDisplayDeg) * 0.22;
+  oriAngles.textContent = `Pitch ${pitchDisplayDeg.toFixed(1)}° | Roll ${rollDisplayDeg.toFixed(1)}°`;
+
+  const motionNow = Math.abs(zGoal - puckGroup.rotation.z) + Math.abs(xGoal - puckGroup.rotation.x);
+  motionDisplay = motionDisplay * 0.75 + motionNow * 0.25;
+  if (motionDisplay > 0.11) {
+    oriMotion.textContent = 'Active motion';
+  } else if (motionDisplay > 0.04) {
+    oriMotion.textContent = 'Gentle motion';
+  } else {
+    oriMotion.textContent = 'Steady';
+  }
+
+  renderer.render(scene, camera);
+}
+animate();
+
+function updateOrientation(x, y, z) {
+  // Raw LIS3DH counts, not converted to g — direction matters more than
+  // exact magnitude here since this is a relative tilt indicator, not a
+  // precision instrument.
+  if (!filtReady) {
+    filtX = x;
+    filtY = y;
+    filtZ = z;
+    filtReady = true;
+  } else {
+    // Lightweight low-pass filtering removes jitter before converting to tilt.
+    filtX = filtX * 0.78 + x * 0.22;
+    filtY = filtY * 0.78 + y * 0.22;
+    filtZ = filtZ * 0.78 + z * 0.22;
+  }
+
+  const pitch = Math.atan2(filtX, Math.sqrt(filtY * filtY + filtZ * filtZ));
+  const roll = Math.atan2(filtY, filtZ);
+  lastPitch = pitch;
+  lastRoll = roll;
+  targetPitch = pitch;
+  targetRoll = roll;
+
+  rX.textContent = Math.round(filtX);
+  rY.textContent = Math.round(filtY);
+  rZ.textContent = Math.round(filtZ);
+}
+
+// ---- Gesture detection 3D view ----
+// A second, independent puck + a floating orb whose height tracks proximity:
+// far away when nothing's near, pulled down toward the puck as something
+// approaches the sensor, and it flashes/pulses on an actual gesture event.
+const gestureViewport = document.getElementById('gestureViewport');
+const gScene = new THREE.Scene();
+const gCamera = new THREE.PerspectiveCamera(44, gestureViewport.clientWidth / gestureViewport.clientHeight, 0.1, 100);
+gCamera.position.set(0, 1.7, 5.3);
+gCamera.lookAt(0, 0.8, 0);
+
+const gRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+gRenderer.setSize(gestureViewport.clientWidth, gestureViewport.clientHeight);
+gestureViewport.appendChild(gRenderer.domElement);
+
+gScene.add(new THREE.AmbientLight(0xffffff, 0.7));
+const gDirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+gDirLight.position.set(2, 4, 3);
+gScene.add(gDirLight);
+
+const gPuck = new THREE.Mesh(
+  new THREE.CylinderGeometry(1, 1, 0.28, 48),
+  new THREE.MeshStandardMaterial({ color: 0x0f1512, roughness: 0.6 })
+);
+gScene.add(gPuck);
+
+const floorRing = new THREE.Mesh(
+  new THREE.RingGeometry(1.05, 1.4, 64),
+  new THREE.MeshBasicMaterial({ color: 0x3559c9, transparent: true, opacity: 0.2 })
+);
+floorRing.rotation.x = -Math.PI / 2;
+floorRing.position.y = -0.12;
+gScene.add(floorRing);
+
+// Detection cone — a faint translucent volume above the sensor, purely
+// illustrative of the sensor's field of view, not a real measured angle.
+const detectionCone = new THREE.Mesh(
+  new THREE.ConeGeometry(1.3, 3, 32, 1, true),
+  new THREE.MeshBasicMaterial({ color: 0x3559c9, transparent: true, opacity: 0.06, side: THREE.DoubleSide })
+);
+detectionCone.position.y = 1.35;
+gScene.add(detectionCone);
+
+// The orb representing whatever the sensor is currently seeing.
+const orbMaterial = new THREE.MeshStandardMaterial({ color: 0x2f8f5b, emissive: 0x0f3a24, emissiveIntensity: 0.4 });
+const orb = new THREE.Mesh(new THREE.SphereGeometry(0.22, 24, 24), orbMaterial);
+orb.position.y = 2.45;
+gScene.add(orb);
+
+const orbHalo = new THREE.Mesh(
+  new THREE.RingGeometry(0.25, 0.4, 40),
+  new THREE.MeshBasicMaterial({ color: 0x2f8f5b, transparent: true, opacity: 0.38, side: THREE.DoubleSide })
+);
+orbHalo.rotation.x = -Math.PI / 2;
+orb.add(orbHalo);
+
+let targetOrbY = 2.45;
+let targetOrbX = 0;
+let pulseStrength = 0;
+
+function resizeGestureRenderer() {
+  const w = gestureViewport.clientWidth, h = gestureViewport.clientHeight;
+  gCamera.aspect = w / h;
+  gCamera.updateProjectionMatrix();
+  gRenderer.setSize(w, h);
+}
+window.addEventListener('resize', resizeGestureRenderer);
+
+function animateGesture() {
+  requestAnimationFrame(animateGesture);
+
+  orb.position.y += (targetOrbY - orb.position.y) * 0.2;
+  orb.position.x += (targetOrbX - orb.position.x) * 0.22;
+  targetOrbX *= 0.94;
+
+  floorRing.material.opacity = 0.15 + pulseStrength * 0.25;
+  orbHalo.scale.setScalar(1 + pulseStrength * 0.7);
+  orbMaterial.emissiveIntensity = Math.min(1.5, orbMaterial.emissiveIntensity + pulseStrength * 0.25);
+  pulseStrength *= 0.88;
+
+  gRenderer.render(gScene, gCamera);
+}
+animateGesture();
+
+// Maps a 0–255 proximity reading to an orb height: far (2.45) when nothing's
+// near, close to the puck's surface (0.50) at maximum proximity.
+function updateGestureOrb(prox) {
+  const clamped = Math.max(0, Math.min(255, prox));
+  const height = 2.45 - (clamped / 255) * 1.95;
+  targetOrbY = height;
+  const closeness = clamped / 255;
+  orbMaterial.emissiveIntensity = 0.3 + closeness * 0.8;
+}
+
+function pulseGestureOrb() {
+  gestureViewport.classList.add('pulsing');
+  const originalScale = orb.scale.x;
+  orb.scale.set(1.8, 1.8, 1.8);
+  pulseStrength = 1;
+  setTimeout(() => {
+    orb.scale.set(originalScale, originalScale, originalScale);
+    gestureViewport.classList.remove('pulsing');
+  }, 400);
+}
+
+setState('disconnected');
+setGestureState('Idle', 'idle');
+</script>
+</body>
+</html>
