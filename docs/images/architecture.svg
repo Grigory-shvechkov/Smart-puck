@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 620" font-family="Menlo, Consolas, 'Courier New', monospace">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0f1512"/>
+    </marker>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3559c9"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="980" height="620" fill="#eef1ea"/>
+
+  <!-- Power path -->
+  <g font-size="12" fill="#0f1512">
+    <rect x="30" y="30" width="120" height="46" rx="4" fill="#ffffff" stroke="#c8cfc2"/>
+    <text x="90" y="58" text-anchor="middle">USB-C</text>
+
+    <rect x="200" y="30" width="150" height="46" rx="4" fill="#ffffff" stroke="#c8cfc2"/>
+    <text x="275" y="52" text-anchor="middle">TP4056</text>
+    <text x="275" y="66" text-anchor="middle" font-size="10" fill="#565f52">charge IC</text>
+
+    <rect x="400" y="30" width="150" height="46" rx="4" fill="#ffffff" stroke="#c8cfc2"/>
+    <text x="475" y="52" text-anchor="middle">LiPo battery</text>
+    <text x="475" y="66" text-anchor="middle" font-size="10" fill="#565f52">via JST</text>
+
+    <rect x="600" y="30" width="150" height="46" rx="4" fill="#ffffff" stroke="#2f8f5b"/>
+    <text x="675" y="52" text-anchor="middle">SW1</text>
+    <text x="675" y="66" text-anchor="middle" font-size="10" fill="#1c5c3b">master switch</text>
+
+    <rect x="800" y="30" width="150" height="46" rx="4" fill="#ffffff" stroke="#c8cfc2"/>
+    <text x="875" y="52" text-anchor="middle">LDO</text>
+    <text x="875" y="66" text-anchor="middle" font-size="10" fill="#565f52">regulated 3V3</text>
+
+    <line x1="150" y1="53" x2="196" y2="53" stroke="#0f1512" marker-end="url(#arrow)"/>
+    <line x1="350" y1="53" x2="396" y2="53" stroke="#0f1512" marker-end="url(#arrow)"/>
+    <line x1="550" y1="53" x2="596" y2="53" stroke="#0f1512" marker-end="url(#arrow)"/>
+    <line x1="750" y1="53" x2="796" y2="53" stroke="#0f1512" marker-end="url(#arrow)"/>
+  </g>
+  <text x="30" y="18" font-size="11" fill="#8a8f83">POWER — SW1 is the only true zero-current off state</text>
+
+  <!-- vertical feed from LDO down into ESP32 -->
+  <line x1="875" y1="76" x2="875" y2="138" stroke="#0f1512"/>
+  <line x1="875" y1="138" x2="510" y2="138" stroke="#0f1512"/>
+  <line x1="510" y1="138" x2="510" y2="226" stroke="#0f1512" marker-end="url(#arrow)"/>
+  <text x="700" y="128" font-size="10" fill="#565f52" text-anchor="middle">3V3 rail — powers ESP32 + all peripherals</text>
+
+  <!-- ESP32-S3 hub -->
+  <rect x="380" y="230" width="260" height="130" rx="6" fill="#0f1512"/>
+  <text x="510" y="285" text-anchor="middle" font-size="16" fill="#eef1ea" font-weight="bold">ESP32-S3</text>
+  <text x="510" y="305" text-anchor="middle" font-size="11" fill="#c8cfc2">deep sleep + wake</text>
+  <text x="510" y="320" text-anchor="middle" font-size="11" fill="#c8cfc2">BLE + I2C + LED/PWM</text>
+
+  <!-- Accelerometer -->
+  <rect x="60" y="150" width="200" height="60" rx="4" fill="#ffffff" stroke="#c8cfc2"/>
+  <text x="160" y="174" text-anchor="middle" font-size="13">LIS3DH accelerometer</text>
+  <text x="160" y="192" text-anchor="middle" font-size="10" fill="#565f52">I2C 0x18 + wake interrupt</text>
+  <line x1="260" y1="200" x2="386" y2="255" stroke="#0f1512" marker-end="url(#arrow)"/>
+  <text x="300" y="220" font-size="10" fill="#565f52">slap to wake / tap = start</text>
+
+  <!-- Gesture sensor -->
+  <rect x="60" y="400" width="200" height="70" rx="4" fill="#ffffff" stroke="#c8cfc2"/>
+  <text x="160" y="424" text-anchor="middle" font-size="13">APDS-9960</text>
+  <text x="160" y="440" text-anchor="middle" font-size="10" fill="#565f52">gesture / proximity</text>
+  <text x="160" y="455" text-anchor="middle" font-size="10" fill="#8a8f83">off-board, via H1 header</text>
+  <line x1="260" y1="420" x2="386" y2="345" stroke="#0f1512" marker-end="url(#arrow)"/>
+  <text x="300" y="405" font-size="10" fill="#565f52">I2C 0x39 + INT</text>
+
+  <!-- LEDs -->
+  <rect x="720" y="150" width="200" height="60" rx="4" fill="#ffffff" stroke="#c8cfc2"/>
+  <text x="820" y="174" text-anchor="middle" font-size="13">6x WS2812B LEDs</text>
+  <text x="820" y="192" text-anchor="middle" font-size="10" fill="#565f52">single-wire data chain</text>
+  <line x1="634" y1="255" x2="756" y2="200" stroke="#0f1512" marker-end="url(#arrow)"/>
+
+  <!-- Buzzer -->
+  <rect x="720" y="400" width="200" height="60" rx="4" fill="#ffffff" stroke="#c8cfc2"/>
+  <text x="820" y="424" text-anchor="middle" font-size="13">Piezo buzzer</text>
+  <text x="820" y="442" text-anchor="middle" font-size="10" fill="#565f52">driven via transistor</text>
+  <line x1="634" y1="345" x2="756" y2="405" stroke="#0f1512" marker-end="url(#arrow)"/>
+
+  <!-- BLE to web app -->
+  <rect x="380" y="500" width="260" height="60" rx="4" fill="#ffffff" stroke="#3559c9"/>
+  <text x="510" y="524" text-anchor="middle" font-size="13" fill="#1c3a8f">Browser web app</text>
+  <text x="510" y="542" text-anchor="middle" font-size="10" fill="#3559c9">Chrome / Edge, Web Bluetooth</text>
+  <line x1="510" y1="360" x2="510" y2="496" stroke="#3559c9" stroke-dasharray="4 3" marker-end="url(#arrowBlue)" marker-start="url(#arrowBlue)"/>
+  <text x="520" y="435" font-size="10" fill="#3559c9">Nordic UART over BLE</text>
+
+  <text x="30" y="600" font-size="11" fill="#8a8f83">Full reasoning for these choices lives in docs/PROJECT_HISTORY.md</text>
+</svg>
