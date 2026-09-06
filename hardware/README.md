@@ -3,19 +3,22 @@
 This folder holds the electrical design files for the Smart Puck: schematic,
 PCB layout, and bill of materials.
 
-The board was designed in EasyEDA. Suggested layout once exports are added:
+The board was designed in EasyEDA.
 
 ```
 hardware/
-├── schematic/      # Schematic PDF/PNG exports, .json/.eeschema source if exported
-├── pcb/             # PCB layout exports, Gerbers, drill files
-├── bom/              # Bill of materials (CSV/XLSX)
+├── schematic/
+│   ├── SCH_Schematic1_2026-09-05.pdf   # Main schematic
+│   └── SCH_Schematic2_2026-09-05.pdf   # Secondary sheet
+├── pcb/
+│   └── PCB_PCB1_2026-09-05.pdf         # PCB layout export
+├── bom/              # Bill of materials (CSV/XLSX) — pending
 └── README.md
 ```
 
-**Status:** schematic PDF exports are in `schematic/`. PCB layout/Gerbers and
-BOM CSV are still pending. See `docs/PROJECT_HISTORY.md` for the pin
-assignments, part choices, and BOM fixes worked out during schematic/PCB
+**Status:** schematic and PCB layout PDF exports are in place. Gerbers/drill
+files and the BOM CSV are still pending. See `docs/PROJECT_HISTORY.md` for the
+pin assignments, part choices, and BOM fixes worked out during schematic/PCB
 review.
 
 Key parts referenced in the design history:
