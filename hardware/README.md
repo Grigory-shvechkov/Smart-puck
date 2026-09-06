@@ -13,10 +13,10 @@ hardware/
 └── README.md
 ```
 
-**Status:** design files have not yet been uploaded to this repo — see
-`docs/PROJECT_HISTORY.md` for the pin assignments, part choices, and BOM fixes
-that were worked out during schematic/PCB review, pending the actual exports
-(schematic PDF, Gerbers, BOM CSV) being added here from EasyEDA.
+**Status:** schematic PDF exports are in `schematic/`. PCB layout/Gerbers and
+BOM CSV are still pending. See `docs/PROJECT_HISTORY.md` for the pin
+assignments, part choices, and BOM fixes worked out during schematic/PCB
+review.
 
 Key parts referenced in the design history:
 - MCU: ESP32-S3
